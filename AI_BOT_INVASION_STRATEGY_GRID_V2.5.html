@@ -1,0 +1,1328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mech Aegis: Rogue Uprising</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #222;
+      color: #eee;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+
+    h1 {
+      margin: 10px 0;
+    }
+
+    #ui {
+      margin: 10px 0;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    #ui span {
+      font-size: 16px;
+    }
+
+    #towerSelector {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    #towerSelector span {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+
+    #gameCanvas {
+      border: 2px solid #555;
+      background: #111;
+      cursor: pointer;
+    }
+
+    #instructions {
+      margin-top: 10px;
+      max-width: 900px;
+      font-size: 14px;
+      color: #ccc;
+    }
+
+    button {
+      padding: 6px 10px;
+      border-radius: 4px;
+      border: none;
+      background: #444;
+      color: #eee;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    button:hover {
+      background: #666;
+    }
+
+    button.selected {
+      background: #2ecc71;
+      color: #111;
+      font-weight: bold;
+    }
+
+    #gameOver {
+      margin-top: 10px;
+      font-size: 18px;
+      color: #ff7676;
+    }
+  </style>
+</head>
+<body>
+  <h1>AI BOT INVASION STRATEGY DEFENSE</h1>
+
+  <div id="ui">
+    <span>Tokens: <span id="gold">100</span></span>
+    <span>Lives: <span id="lives">10</span></span>
+    <span>Wave: <span id="wave">1</span></span>
+    <span>Bots: <span id="botCount">1</span>/4</span>
+    <span>Score: <span id="score">0</span></span>
+
+    <button id="startBtn">Start</button>
+    <button id="pauseBtn">Pause</button>
+    <button id="buyBotBtn">Buy Bot (75)</button>
+
+    <div id="towerSelector">
+      <span>Towers:</span>
+      <button data-tower="0" class="selected">Basic<br>25</button>
+      <button data-tower="1">Sniper<br>40</button>
+      <button data-tower="2">Rapid<br>35</button>
+    </div>
+  </div>
+
+  <!-- 20 x 12 grid (800 x 480, tile 40) -->
+  <canvas id="gameCanvas" width="800" height="480"></canvas>
+
+  <div id="instructions">
+    <strong>How to play:</strong><br>
+    • Click on a tile to place the currently selected tower.<br>
+    • Click <b>Buy Bot (75)</b> to deploy up to 3 extra roaming AI bots (max 4 total).<br>
+    • Bots and tanks are friendly mechs; enemies are hostile robots, trolls, and aliens.<br>
+    • Bots chase enemies and auto-collect perks that drop from destroyed enemies:<br>
+    &nbsp;&nbsp;– <b>Green cross</b>: +1 life (up to 10 max)<br>
+    &nbsp;&nbsp;– <b>Yellow lightning</b>: 30s 1.5× attack power for all shots fired during buff<br>
+    &nbsp;&nbsp;– <b>Gold coin</b>: +50 tokens<br>
+    &nbsp;&nbsp;– <b>Red bomb</b>: rare, wipes all enemies on the board when collected<br>
+    • Aliens appear rarely and bomb the weakest 3×3 defense if not destroyed in time.<br>
+    • Trolls march straight and smash towers one by one along their lane.<br>
+    • Perks are rare and disappear after a short time if not collected.<br>
+    • Click <b>Start</b> to begin or restart. Click <b>Pause</b> to pause/resume.<br>
+    • When paused, you cannot place towers or buy new bots.
+  </div>
+
+  <div id="gameOver"></div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const goldSpan = document.getElementById('gold');
+    const livesSpan = document.getElementById('lives');
+    const waveSpan = document.getElementById('wave');
+    const botCountSpan = document.getElementById('botCount');
+    const scoreSpan = document.getElementById('score');
+    const gameOverDiv = document.getElementById('gameOver');
+
+    const towerButtons = document.querySelectorAll('[data-tower]');
+    const startBtn = document.getElementById('startBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const buyBotBtn = document.getElementById('buyBotBtn');
+
+    const TILE_SIZE = 40;
+    const GRID_COLS = 20;
+    const GRID_ROWS = 12;
+
+    const TOWER_TYPES = [
+      { name: 'Basic',  cost: 25, range: 110, fireRate: 24, damage: 10, color: '#3498db' },
+      { name: 'Sniper', cost: 40, range: 200, fireRate: 60, damage: 25, color: '#9b59b6' },
+      { name: 'Rapid',  cost: 35, range: 80,  fireRate: 8,  damage: 6,  color: '#e67e22' }
+    ];
+
+    // kind: "normal", "alien", "troll"
+    const ENEMY_TYPES = [
+      { name: 'Grunt', baseHp: 30, baseSpeed: 1.0, reward: 5, color: '#e74c3c', radius: 12 },
+      { name: 'Fast',  baseHp: 22, baseSpeed: 1.8, reward: 4, color: '#f1c40f', radius: 10 },
+      { name: 'Tank',  baseHp: 60, baseSpeed: 0.7, reward: 8, color: '#2ecc71', radius: 14 }
+    ];
+
+    const ENEMIES_PER_WAVE_BASE = 6;
+    const ENEMIES_PER_WAVE_INCREMENT = 2;
+    const HP_SCALING_PER_WAVE = 0.18;
+    const SPEED_SCALING_PER_WAVE = 0.04;
+
+    const BULLET_SPEED = 5;
+
+    const DANGER_FROM_HIT = 0.4;
+    const DANGER_FROM_DEATH = 1.0;
+    const DANGER_DECAY = 0.995;
+    const EFFECTIVENESS_WEIGHT = 1.5;
+
+    const BOT_COST = 75;
+    const MAX_BOTS = 4;
+
+    // Perks
+    const PERK_COLLECT_RADIUS = 24;
+    const POWER_MULTIPLIER = 1.5;
+    const POWER_DURATION_MS = 30000;
+    const PERK_LIFETIME_MS = 8000;
+
+    // New special enemy chances
+    const ALIEN_CHANCE = 1 / 200;  // ~0.5%
+    const TROLL_CHANCE = 0.03;     // ~3%
+
+    let gold;
+    let lives;
+    let wave;
+    let gameOver;
+    let started = false;
+    let paused = false;
+
+    let enemySpawnCounter;
+    let enemiesSpawnedThisWave;
+    let waveInProgress;
+    let enemiesPerWaveForCurrent;
+    let selectedTowerTypeIndex;
+
+    const towers = [];
+    const enemies = [];
+    const bullets = [];
+    const bots = [];
+    const perks = [];
+
+    let dangerGrid = createDangerGrid();
+    const enemyStats = ENEMY_TYPES.map(() => ({ spawned: 0, survived: 0 }));
+
+    let totalKills = 0;
+    let powerEndTime = 0;
+    let score = 0;
+
+    // Perk messages
+    let lastPerkMessage = '';
+    let lastPerkMessageUntil = 0;
+
+    function createDangerGrid() {
+      return Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(0));
+    }
+
+    function getCurrentPowerMultiplier() {
+      return performance.now() < powerEndTime ? POWER_MULTIPLIER : 1.0;
+    }
+
+    function resetGameState() {
+      gold = 100;
+      lives = 10;
+      wave = 1;
+      gameOver = false;
+      started = true;
+      paused = false;
+
+      enemySpawnCounter = 0;
+      enemiesSpawnedThisWave = 0;
+      waveInProgress = false;
+      enemiesPerWaveForCurrent = ENEMIES_PER_WAVE_BASE;
+      selectedTowerTypeIndex = 0;
+
+      towers.length = 0;
+      enemies.length = 0;
+      bullets.length = 0;
+      bots.length = 0;
+      perks.length = 0;
+
+      dangerGrid = createDangerGrid();
+      for (const stat of enemyStats) {
+        stat.spawned = 0;
+        stat.survived = 0;
+      }
+
+      totalKills = 0;
+      powerEndTime = 0;
+      lastPerkMessage = '';
+      lastPerkMessageUntil = 0;
+      score = 0;
+
+      // Initial ally bot
+      bots.push({
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        speed: 2.1,
+        range: 130,
+        fireRate: 20,
+        fireCooldown: 0,
+        damage: 10,
+        color: '#f1c40f'
+      });
+
+      gameOverDiv.textContent = '';
+      updateUI();
+    }
+
+    // --- UI tower selection ---
+    towerButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectedTowerTypeIndex = parseInt(btn.dataset.tower, 10);
+        towerButtons.forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+      });
+    });
+
+    // --- Coordinate helpers ---
+    function tileToPixelCenter(tx, ty) {
+      return { x: tx * TILE_SIZE + TILE_SIZE / 2, y: ty * TILE_SIZE + TILE_SIZE / 2 };
+    }
+
+    function pixelToTile(x, y) {
+      const tx = Math.floor(x / TILE_SIZE);
+      const ty = Math.floor(y / TILE_SIZE);
+      if (tx < 0 || tx >= GRID_COLS || ty < 0 || ty >= GRID_ROWS) return null;
+      return { tx, ty };
+    }
+
+    // --- Danger map ---
+    function addDangerAtPixel(x, y, amount) {
+      const t = pixelToTile(x, y);
+      if (!t) return;
+      dangerGrid[t.ty][t.tx] += amount;
+    }
+
+    function decayDangerGrid() {
+      for (let y = 0; y < GRID_ROWS; y++) {
+        for (let x = 0; x < GRID_COLS; x++) {
+          dangerGrid[y][x] *= DANGER_DECAY;
+        }
+      }
+    }
+
+    // --- A* helpers ---
+    function neighborsOf(tx, ty) {
+      const neighbors = [];
+      const dirs = [
+        { dx: 1, dy: 0 },
+        { dx: -1, dy: 0 },
+        { dx: 0, dy: 1 },
+        { dx: 0, dy: -1 }
+      ];
+      for (const d of dirs) {
+        const nx = tx + d.dx;
+        const ny = ty + d.dy;
+        if (nx >= 0 && nx < GRID_COLS && ny >= 0 && ny < GRID_ROWS) {
+          neighbors.push({ tx: nx, ty: ny });
+        }
+      }
+      return neighbors;
+    }
+
+    function tileInTowerRange(tx, ty) {
+      if (towers.length === 0) return 0;
+      const p = tileToPixelCenter(tx, ty);
+      let penalty = 0;
+      for (const tower of towers) {
+        const dx = p.x - tower.x;
+        const dy = p.y - tower.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist <= tower.range) {
+          const proximity = 1 - dist / tower.range;
+          penalty += 0.5 + proximity;
+        }
+      }
+      return penalty;
+    }
+
+    function heuristic(tx, ty) {
+      return (GRID_COLS - 1 - tx);
+    }
+
+    function computeAStarPath(startTile, goalTiles) {
+      function key(tx, ty) {
+        return `${tx},${ty}`;
+      }
+
+      const startKey = key(startTile.tx, startTile.ty);
+      const openSet = new Set([startKey]);
+      const cameFrom = new Map();
+      const gScore = new Map();
+      const fScore = new Map();
+
+      for (let y = 0; y < GRID_ROWS; y++) {
+        for (let x = 0; x < GRID_COLS; x++) {
+          const k = key(x, y);
+          gScore.set(k, Infinity);
+          fScore.set(k, Infinity);
+        }
+      }
+
+      gScore.set(startKey, 0);
+      fScore.set(startKey, heuristic(startTile.tx, startTile.ty));
+
+      const goalSet = new Set(goalTiles.map(t => key(t.tx, t.ty)));
+
+      function lowestFScoreInOpen() {
+        let bestKey = null;
+        let bestVal = Infinity;
+        for (const k of openSet) {
+          const val = fScore.get(k);
+          if (val < bestVal) {
+            bestVal = val;
+            bestKey = k;
+          }
+        }
+        return bestKey;
+      }
+
+      while (openSet.size > 0) {
+        const currentKey = lowestFScoreInOpen();
+        if (!currentKey) break;
+
+        if (goalSet.has(currentKey)) {
+          const pathTiles = [];
+          let ck = currentKey;
+          while (ck) {
+            const [xStr, yStr] = ck.split(',');
+            pathTiles.push({ tx: parseInt(xStr, 10), ty: parseInt(yStr, 10) });
+            ck = cameFrom.get(ck);
+          }
+          pathTiles.reverse();
+          return pathTiles.map(t => tileToPixelCenter(t.tx, t.ty));
+        }
+
+        openSet.delete(currentKey);
+        const [cxStr, cyStr] = currentKey.split(',');
+        const cx = parseInt(cxStr, 10);
+        const cy = parseInt(cyStr, 10);
+
+        for (const n of neighborsOf(cx, cy)) {
+          const nk = key(n.tx, n.ty);
+          const danger = dangerGrid[n.ty][n.tx];
+          const towerPenalty = tileInTowerRange(n.tx, n.ty);
+          const stepCost = 1 + danger * 1.2 + towerPenalty;
+          const tentativeG = gScore.get(currentKey) + stepCost;
+
+          if (tentativeG < gScore.get(nk)) {
+            cameFrom.set(nk, currentKey);
+            gScore.set(nk, tentativeG);
+            const f = tentativeG + heuristic(n.tx, n.ty);
+            fScore.set(nk, f);
+            openSet.add(nk);
+          }
+        }
+      }
+
+      return [tileToPixelCenter(startTile.tx, startTile.ty)];
+    }
+
+    // --- Special target for Aliens: weakest 3x3 defense near front ---
+    function findWeakFrontTile() {
+      let bestScore = Infinity;
+      let bestTile = { tx: GRID_COLS - 2, ty: Math.floor(GRID_ROWS / 2) };
+
+      // Slide 3x3 over last 6 columns
+      for (let tx = GRID_COLS - 6; tx < GRID_COLS; tx++) {
+        if (tx < 1 || tx > GRID_COLS - 2) continue; // center tile needs neighbors
+        for (let ty = 1; ty < GRID_ROWS - 1; ty++) {
+          let count = 0;
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+              const cx = tx + dx;
+              const cy = ty + dy;
+              if (cx < 0 || cy < 0 || cx >= GRID_COLS || cy >= GRID_ROWS) continue;
+              if (towers.some(t => t.tx === cx && t.ty === cy)) count++;
+            }
+          }
+          if (count < bestScore) {
+            bestScore = count;
+            bestTile = { tx, ty };
+          }
+        }
+      }
+      return bestTile;
+    }
+
+    // --- Enemy spawning & stats ---
+    function chooseEnemyTypeIndex() {
+      let totalWeight = 0;
+      const weights = [];
+      for (let i = 0; i < ENEMY_TYPES.length; i++) {
+        const s = enemyStats[i];
+        let successRate = 0.33;
+        if (s.spawned > 0) {
+          successRate = s.survived / s.spawned;
+        }
+        const w = 1 + EFFECTIVENESS_WEIGHT * successRate;
+        weights.push(w);
+        totalWeight += w;
+      }
+      let r = Math.random() * totalWeight;
+      for (let i = 0; i < weights.length; i++) {
+        if (r < weights[i]) return i;
+        r -= weights[i];
+      }
+      return 0;
+    }
+
+    function spawnNormalEnemy() {
+      const typeIndex = chooseEnemyTypeIndex();
+      const type = ENEMY_TYPES[typeIndex];
+
+      const startRow = Math.floor(Math.random() * GRID_ROWS);
+      const startTile = { tx: 0, ty: startRow };
+
+      const goalTiles = [];
+      for (let y = 0; y < GRID_ROWS; y++) {
+        goalTiles.push({ tx: GRID_COLS - 1, ty: y });
+      }
+
+      const path = computeAStarPath(startTile, goalTiles);
+      const startPos = path[0] || tileToPixelCenter(startTile.tx, startTile.ty);
+
+      const hpScale = 1 + (wave - 1) * HP_SCALING_PER_WAVE;
+      const speedScale = 1 + (wave - 1) * SPEED_SCALING_PER_WAVE;
+
+      enemies.push({
+        kind: 'normal',
+        x: startPos.x,
+        y: startPos.y,
+        vx: 0,
+        vy: 0,
+        hp: type.baseHp * hpScale,
+        maxHp: type.baseHp * hpScale,
+        speed: type.baseSpeed * speedScale,
+        reward: type.reward,
+        color: type.color,
+        radius: type.radius,
+        path,
+        pathIndex: 0,
+        typeIndex
+      });
+
+      enemyStats[typeIndex].spawned++;
+    }
+
+    function spawnAlienEnemy() {
+      const startRow = Math.floor(Math.random() * GRID_ROWS);
+      const startTile = { tx: 0, ty: startRow };
+      const targetTile = findWeakFrontTile();
+      const goalTiles = [targetTile];
+      const path = computeAStarPath(startTile, goalTiles);
+      const startPos = path[0] || tileToPixelCenter(startTile.tx, startTile.ty);
+      const bombPos = tileToPixelCenter(targetTile.tx, targetTile.ty);
+
+      const baseHp = 80;
+      const baseSpeed = 1.4;
+      const hpScale = 1 + (wave - 1) * HP_SCALING_PER_WAVE;
+      const speedScale = 1 + (wave - 1) * SPEED_SCALING_PER_WAVE;
+
+      enemies.push({
+        kind: 'alien',
+        x: startPos.x,
+        y: startPos.y,
+        vx: 0,
+        vy: 0,
+        hp: baseHp * hpScale,
+        maxHp: baseHp * hpScale,
+        speed: baseSpeed * speedScale,
+        reward: 12,
+        color: '#9b59b6',
+        radius: 16,
+        path,
+        pathIndex: 0,
+        bombX: bombPos.x,
+        bombY: bombPos.y,
+        bombed: false,
+        typeIndex: null
+      });
+    }
+
+    function spawnTrollEnemy() {
+      const row = Math.floor(Math.random() * GRID_ROWS);
+      const pos = tileToPixelCenter(0, row);
+      const baseHp = 100;
+      const baseSpeed = 0.9;
+      const hpScale = 1 + (wave - 1) * HP_SCALING_PER_WAVE;
+      const speedScale = 1 + (wave - 1) * SPEED_SCALING_PER_WAVE;
+
+      enemies.push({
+        kind: 'troll',
+        x: pos.x,
+        y: pos.y,
+        vx: baseSpeed * speedScale,
+        vy: 0,
+        hp: baseHp * hpScale,
+        maxHp: baseHp * hpScale,
+        speed: baseSpeed * speedScale,
+        reward: 15,
+        color: '#95a5a6',
+        radius: 18,
+        rowTy: row,
+        typeIndex: null
+      });
+    }
+
+    function spawnEnemy() {
+      const r = Math.random();
+      if (r < ALIEN_CHANCE) {
+        spawnAlienEnemy();
+      } else if (r < ALIEN_CHANCE + TROLL_CHANCE) {
+        spawnTrollEnemy();
+      } else {
+        spawnNormalEnemy();
+      }
+    }
+
+    function updateEnemy(enemy) {
+      if (enemy.kind === 'troll') {
+        // Move straight to the right, smashing towers handled elsewhere
+        enemy.vx = enemy.speed;
+        enemy.vy = 0;
+        enemy.x += enemy.vx;
+        if (enemy.x > canvas.width + 20) {
+          enemy.reachedEnd = true;
+        }
+        return;
+      }
+
+      if (!enemy.path || enemy.path.length === 0) return;
+      const target = enemy.path[enemy.pathIndex];
+      if (!target) {
+        enemy.reachedEnd = true;
+        return;
+      }
+
+      const dx = target.x - enemy.x;
+      const dy = target.y - enemy.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < enemy.speed) {
+        enemy.x = target.x;
+        enemy.y = target.y;
+        enemy.pathIndex++;
+        if (enemy.pathIndex >= enemy.path.length) {
+          if (enemy.kind === 'alien' && !enemy.bombed) {
+            // Reached bomb point: wipe towers in 3x3 area around its tile
+            const tile = pixelToTile(enemy.bombX, enemy.bombY);
+            if (tile) {
+              for (let i = towers.length - 1; i >= 0; i--) {
+                const t = towers[i];
+                if (Math.abs(t.tx - tile.tx) <= 1 && Math.abs(t.ty - tile.ty) <= 1) {
+                  towers.splice(i, 1);
+                }
+              }
+            }
+            enemy.bombed = true;
+            enemy.hp = 0; // die after bombing
+          } else {
+            enemy.reachedEnd = true;
+          }
+        }
+      } else {
+        enemy.vx = (dx / dist) * enemy.speed;
+        enemy.vy = (dy / dist) * enemy.speed;
+        enemy.x += enemy.vx;
+        enemy.y += enemy.vy;
+      }
+    }
+
+    // --- Towers ---
+    function placeTower(tileX, tileY) {
+      if (!started || gameOver || paused) return;
+      if (towers.some(t => t.tx === tileX && t.ty === tileY)) return;
+
+      const type = TOWER_TYPES[selectedTowerTypeIndex];
+      if (gold < type.cost) return;
+
+      gold -= type.cost;
+      updateUI();
+
+      const pos = tileToPixelCenter(tileX, tileY);
+      towers.push({
+        tx: tileX,
+        ty: tileY,
+        x: pos.x,
+        y: pos.y,
+        range: type.range,
+        fireCooldown: 0,
+        fireRate: type.fireRate,
+        damage: type.damage,
+        color: type.color,
+        angle: 0,
+        typeIndex: selectedTowerTypeIndex
+      });
+    }
+
+    function spawnBullet(shooter, target) {
+      const dx = target.x - shooter.x;
+      const dy = target.y - shooter.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const mult = getCurrentPowerMultiplier();
+
+      bullets.push({
+        x: shooter.x,
+        y: shooter.y,
+        vx: (dx / dist) * BULLET_SPEED,
+        vy: (dy / dist) * BULLET_SPEED,
+        radius: 3,
+        damage: shooter.damage * mult
+      });
+    }
+
+    function spawnLeadingBullet(shooter, target) {
+      const sx = shooter.x;
+      const sy = shooter.y;
+      const tx = target.x;
+      const ty = target.y;
+      const vx = target.vx || 0;
+      const vy = target.vy || 0;
+      const s = BULLET_SPEED;
+      const rx = tx - sx;
+      const ry = ty - sy;
+
+      const a = vx * vx + vy * vy - s * s;
+      const b = 2 * (rx * vx + ry * vy);
+      const c = rx * rx + ry * ry;
+
+      let aimX = tx;
+      let aimY = ty;
+
+      if (Math.abs(a) < 1e-6) {
+        // Degenerate: shoot directly
+      } else {
+        const disc = b * b - 4 * a * c;
+        if (disc >= 0) {
+          const sqrtD = Math.sqrt(disc);
+          let t1 = (-b - sqrtD) / (2 * a);
+          let t2 = (-b + sqrtD) / (2 * a);
+          let t = Math.min(t1, t2);
+          if (t < 0) t = Math.max(t1, t2);
+          if (t > 0) {
+            aimX = tx + vx * t;
+            aimY = ty + vy * t;
+          }
+        }
+      }
+
+      const dx = aimX - sx;
+      const dy = aimY - sy;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const mult = getCurrentPowerMultiplier();
+
+      bullets.push({
+        x: sx,
+        y: sy,
+        vx: (dx / dist) * BULLET_SPEED,
+        vy: (dy / dist) * BULLET_SPEED,
+        radius: 3,
+        damage: shooter.damage * mult
+      });
+    }
+
+    function startWave() {
+      waveInProgress = true;
+      enemiesSpawnedThisWave = 0;
+      enemySpawnCounter = 0;
+      enemiesPerWaveForCurrent =
+        ENEMIES_PER_WAVE_BASE + (wave - 1) * ENEMIES_PER_WAVE_INCREMENT;
+      updateUI();
+    }
+
+    // --- Bots (ally AI) with separation ---
+    function updateBots() {
+      if (enemies.length === 0) return;
+
+      // For each bot, compute target direction + separation
+      const separationRadius = 40;
+      const separationWeight = 0.4;
+
+      for (const bot of bots) {
+        // find nearest enemy
+        let nearest = null;
+        let nearestDist = Infinity;
+        for (const e of enemies) {
+          const dx = e.x - bot.x;
+          const dy = e.y - bot.y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < nearestDist) {
+            nearestDist = d;
+            nearest = e;
+          }
+        }
+        if (!nearest) continue;
+
+        // Chase vector
+        let chaseDx = nearest.x - bot.x;
+        let chaseDy = nearest.y - bot.y;
+        let chaseDist = Math.sqrt(chaseDx * chaseDx + chaseDy * chaseDy) || 1;
+        chaseDx /= chaseDist;
+        chaseDy /= chaseDist;
+
+        // Separation from other bots
+        let sepX = 0;
+        let sepY = 0;
+        for (const other of bots) {
+          if (other === bot) continue;
+          const dx = bot.x - other.x;
+          const dy = bot.y - other.y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d > 0 && d < separationRadius) {
+            const strength = (separationRadius - d) / separationRadius;
+            sepX += (dx / d) * strength;
+            sepY += (dy / d) * strength;
+          }
+        }
+
+        // Combine chase + separation
+        let dirX = chaseDx + separationWeight * sepX;
+        let dirY = chaseDy + separationWeight * sepY;
+        const dirLen = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
+        dirX /= dirLen;
+        dirY /= dirLen;
+
+        bot.x += dirX * bot.speed;
+        bot.y += dirY * bot.speed;
+
+        // keep inside arena
+        bot.x = Math.max(10, Math.min(canvas.width - 10, bot.x));
+        bot.y = Math.max(10, Math.min(canvas.height - 10, bot.y));
+
+        // shooting
+        if (bot.fireCooldown > 0) {
+          bot.fireCooldown--;
+        }
+        if (nearestDist <= bot.range && bot.fireCooldown <= 0) {
+          spawnBullet(bot, nearest);
+          bot.fireCooldown = bot.fireRate;
+        }
+      }
+
+      // bots collect perks
+      for (const bot of bots) {
+        for (let i = perks.length - 1; i >= 0; i--) {
+          const p = perks[i];
+          const dx = p.x - bot.x;
+          const dy = p.y - bot.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist <= PERK_COLLECT_RADIUS) {
+            applyPerk(p.type);
+            perks.splice(i, 1);
+          }
+        }
+      }
+    }
+
+    function applyPerk(type) {
+      if (type === 'life') {
+        lives = Math.min(lives + 1, 10);
+        lastPerkMessage = 'Extra life! (max 10)';
+        lastPerkMessageUntil = performance.now() + 3000;
+        updateUI();
+      } else if (type === 'power') {
+        powerEndTime = performance.now() + POWER_DURATION_MS;
+        lastPerkMessage = 'Power surge! +50% damage for 30s.';
+        lastPerkMessageUntil = performance.now() + 3000;
+      } else if (type === 'gold') {
+        gold += 50;
+        lastPerkMessage = 'Gold cache found! +50 tokens.';
+        lastPerkMessageUntil = performance.now() + 3000;
+        updateUI();
+      } else if (type === 'bomb') {
+        triggerBomb();
+        lastPerkMessage = 'Bomb triggered! All enemies destroyed.';
+        lastPerkMessageUntil = performance.now() + 3000;
+      }
+    }
+
+    function triggerBomb() {
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        gold += e.reward;
+        score += e.reward * 10;
+        addDangerAtPixel(e.x, e.y, DANGER_FROM_DEATH);
+        enemies.splice(i, 1);
+      }
+      updateUI();
+    }
+
+    function spawnPerk(x, y, type) {
+      perks.push({
+        x,
+        y,
+        type,
+        expiresAt: performance.now() + PERK_LIFETIME_MS
+      });
+    }
+
+    function maybeDropPerk(x, y) {
+      totalKills++;
+
+      // Bomb: very rare, ~1/500 kills
+      if (Math.random() < 1 / 500) {
+        spawnPerk(x, y, 'bomb');
+        return;
+      }
+
+      // Other perks: very rare, ~9% combined chance
+      const roll = Math.random();
+      if (roll < 0.03) {
+        spawnPerk(x, y, 'life');
+      } else if (roll < 0.06) {
+        spawnPerk(x, y, 'power');
+      } else if (roll < 0.10) {
+        spawnPerk(x, y, 'gold');
+      }
+    }
+
+    // Troll tower smashing (tunneling) – run after enemy movement
+    function handleTrollSmashes() {
+      for (const e of enemies) {
+        if (e.kind !== 'troll') continue;
+        const trollTile = pixelToTile(e.x, e.y);
+        if (!trollTile) continue;
+        for (let i = towers.length - 1; i >= 0; i--) {
+          const t = towers[i];
+          if (Math.abs(t.ty - e.rowTy) <= 1 && Math.abs(t.tx - trollTile.tx) <= 0) {
+            towers.splice(i, 1);
+            break; // one tower per tick per troll
+          }
+        }
+      }
+    }
+
+    // --- Main update ---
+    function update() {
+      // danger decays even while paused
+      decayDangerGrid();
+
+      // handle perk expiration
+      const now = performance.now();
+      for (let i = perks.length - 1; i >= 0; i--) {
+        const p = perks[i];
+        if (p.expiresAt && p.expiresAt <= now) {
+          perks.splice(i, 1);
+        }
+      }
+
+      if (!started || paused || gameOver) return;
+
+      if (waveInProgress) {
+        enemySpawnCounter++;
+        if (enemySpawnCounter >= 40 && enemiesSpawnedThisWave < enemiesPerWaveForCurrent) {
+          spawnEnemy();
+          enemiesSpawnedThisWave++;
+          enemySpawnCounter = 0;
+        }
+
+        if (enemiesSpawnedThisWave >= enemiesPerWaveForCurrent && enemies.length === 0) {
+          waveInProgress = false;
+          wave++;
+          startWave();
+        }
+      }
+
+      // enemies
+      for (const enemy of enemies) {
+        updateEnemy(enemy);
+      }
+
+      // trolls smashing towers
+      handleTrollSmashes();
+
+      // handle enemies reaching end or dying
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        if (e.reachedEnd) {
+          lives--;
+          if (e.typeIndex !== null) {
+            enemyStats[e.typeIndex].survived++;
+          }
+          enemies.splice(i, 1);
+          updateUI();
+          if (lives <= 0) {
+            gameOver = true;
+            started = false;
+            gameOverDiv.textContent = 'Game Over! Press Start to restart.';
+          }
+        } else if (e.hp <= 0) {
+          gold += e.reward;
+          score += e.reward * 10;
+          maybeDropPerk(e.x, e.y);
+          enemies.splice(i, 1);
+          updateUI();
+          addDangerAtPixel(e.x, e.y, DANGER_FROM_DEATH);
+        }
+      }
+
+      // towers fire (with swiveling barrels + sniper lead)
+      for (const tower of towers) {
+        if (tower.fireCooldown > 0) {
+          tower.fireCooldown--;
+        }
+
+        let bestEnemy = null;
+        let bestScore = -Infinity;
+
+        for (const enemy of enemies) {
+          const dx = enemy.x - tower.x;
+          const dy = enemy.y - tower.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist <= tower.range) {
+            const progress = enemy.x / canvas.width;
+            const scoreVal = progress - dist / (tower.range * 4);
+            if (scoreVal > bestScore) {
+              bestScore = scoreVal;
+              bestEnemy = enemy;
+            }
+          }
+        }
+
+        if (bestEnemy) {
+          const dx = bestEnemy.x - tower.x;
+          const dy = bestEnemy.y - tower.y;
+          tower.angle = Math.atan2(dy, dx);
+
+          if (tower.fireCooldown <= 0) {
+            if (tower.typeIndex === 1) {
+              // Sniper with leading
+              spawnLeadingBullet(tower, bestEnemy);
+            } else {
+              spawnBullet(tower, bestEnemy);
+            }
+              tower.fireCooldown = tower.fireRate;
+          }
+        }
+      }
+
+      // bots (ally agents)
+      updateBots();
+
+      // bullets
+      for (const b of bullets) {
+        b.x += b.vx;
+        b.y += b.vy;
+      }
+
+      // bullet collisions & cleanup
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        if (
+          b.x < -20 || b.x > canvas.width + 20 ||
+          b.y < -20 || b.y > canvas.height + 20
+        ) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        for (const enemy of enemies) {
+          const dx = enemy.x - b.x;
+          const dy = enemy.y - b.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < enemy.radius + b.radius) {
+            enemy.hp -= b.damage;
+            bullets.splice(i, 1);
+            addDangerAtPixel(enemy.x, enemy.y, DANGER_FROM_HIT);
+            break;
+          }
+        }
+      }
+    }
+
+    // --- Drawing ---
+    function drawGrid() {
+      for (let y = 0; y < GRID_ROWS; y++) {
+        for (let x = 0; x < GRID_COLS; x++) {
+          const danger = dangerGrid[y][x];
+          const dangerClamped = Math.min(danger, 3.0) / 3.0;
+          const baseR = 35;
+          const bonusR = Math.floor(dangerClamped * 80);
+          const r = baseR + bonusR;
+          const g = 71;
+          const b = 34;
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          ctx.strokeStyle = '#333';
+          ctx.strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        }
+      }
+    }
+
+    function drawTowers() {
+      for (const tower of towers) {
+        ctx.save();
+        ctx.translate(tower.x, tower.y);
+        ctx.rotate(tower.angle || 0);
+
+        // tank body
+        ctx.fillStyle = tower.color;
+        const bodyWidth = 28;
+        const bodyHeight = 18;
+        ctx.fillRect(-bodyWidth / 2, -bodyHeight / 2, bodyWidth, bodyHeight);
+
+        // turret
+        ctx.fillStyle = '#222';
+        ctx.beginPath();
+        ctx.arc(0, 0, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // barrel
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(12, 0);
+        ctx.stroke();
+
+        ctx.restore();
+
+        // range circle
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, tower.range, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    function drawEnemies() {
+      for (const enemy of enemies) {
+        ctx.save();
+        ctx.translate(enemy.x, enemy.y);
+
+        if (enemy.kind === 'troll') {
+          // big grey troll-robot hybrid
+          const w = enemy.radius * 1.8;
+          const h = enemy.radius * 2.2;
+          ctx.fillStyle = enemy.color;
+          ctx.fillRect(-w / 2, -h / 2, w, h);
+          ctx.fillStyle = '#222';
+          ctx.fillRect(-w / 3, -h / 2 - enemy.radius * 0.2, (2 * w) / 3, enemy.radius * 0.7);
+        } else if (enemy.kind === 'alien') {
+          // alien saucer robot
+          const r = enemy.radius;
+          ctx.fillStyle = enemy.color;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, r, r * 0.6, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#2ecc71';
+          ctx.beginPath();
+          ctx.arc(0, -r * 0.3, r * 0.4, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          // normal robot
+          const w = enemy.radius * 1.6;
+          const h = enemy.radius * 2;
+          ctx.fillStyle = enemy.color;
+          ctx.fillRect(-w / 2, -h / 2, w, h);
+
+          ctx.fillStyle = '#222';
+          ctx.fillRect(-w / 3, -h / 2 - enemy.radius * 0.4, (2 * w) / 3, enemy.radius * 0.8);
+
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(-w / 6, -h / 2 - enemy.radius * 0.25, 4, 4);
+          ctx.fillRect(w / 6 - 4, -h / 2 - enemy.radius * 0.25, 4, 4);
+        }
+
+        ctx.restore();
+
+        // HP bar
+        const hpRatio = Math.max(enemy.hp, 0) / enemy.maxHp;
+        const barWidth = 26;
+        const barHeight = 4;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(
+          enemy.x - barWidth / 2,
+          enemy.y - enemy.radius - 12,
+          barWidth,
+          barHeight
+        );
+        ctx.fillStyle = '#2ecc71';
+        ctx.fillRect(
+          enemy.x - barWidth / 2,
+          enemy.y - enemy.radius - 12,
+          barWidth * hpRatio,
+          barHeight
+        );
+      }
+    }
+
+    function drawBots() {
+      for (const bot of bots) {
+        ctx.save();
+        ctx.translate(bot.x, bot.y);
+
+        // body
+        ctx.fillStyle = bot.color;
+        ctx.fillRect(-10, -12, 20, 24);
+
+        // head
+        ctx.fillStyle = '#222';
+        ctx.fillRect(-8, -18, 16, 8);
+
+        // visor
+        ctx.fillStyle = '#0ff';
+        ctx.fillRect(-6, -16, 12, 4);
+
+        ctx.restore();
+
+        // range ring
+        ctx.strokeStyle = 'rgba(255, 255, 0, 0.18)';
+        ctx.beginPath();
+        ctx.arc(bot.x, bot.y, bot.range, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    function drawBullets() {
+      ctx.fillStyle = '#f1c40f';
+      for (const bullet of bullets) {
+        ctx.beginPath();
+        ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawPerks() {
+      for (const p of perks) {
+        if (p.type === 'life') {
+          ctx.fillStyle = '#2ecc71';
+          ctx.fillRect(p.x - 4, p.y - 10, 8, 20);
+          ctx.fillRect(p.x - 10, p.y - 4, 20, 8);
+        } else if (p.type === 'power') {
+          ctx.fillStyle = '#f1c40f';
+          ctx.beginPath();
+          ctx.moveTo(p.x - 4, p.y - 10);
+          ctx.lineTo(p.x + 2, p.y - 2);
+          ctx.lineTo(p.x - 1, p.y - 2);
+          ctx.lineTo(p.x + 4, p.y + 10);
+          ctx.lineTo(p.x - 2, p.y + 2);
+          ctx.lineTo(p.x + 1, p.y + 2);
+          ctx.closePath();
+          ctx.fill();
+        } else if (p.type === 'gold') {
+          ctx.fillStyle = '#f39c12';
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (p.type === 'bomb') {
+          ctx.fillStyle = '#e74c3c';
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#000';
+          ctx.fillRect(p.x - 2, p.y - 11, 4, 6);
+        }
+      }
+    }
+
+    function drawPerkMessage() {
+      const now = performance.now();
+      if (now > lastPerkMessageUntil || !lastPerkMessage) return;
+
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+      ctx.fillStyle = '#fff';
+      ctx.font = '14px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(lastPerkMessage, canvas.width / 2, canvas.height - 16);
+      ctx.textAlign = 'left';
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawGrid();
+      drawTowers();
+      drawBots();
+      drawEnemies();
+      drawBullets();
+      drawPerks();
+      drawPerkMessage();
+
+      if (gameOver) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#fff';
+        ctx.font = '32px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    function updateUI() {
+      goldSpan.textContent = Math.floor(gold);
+      livesSpan.textContent = lives;
+      waveSpan.textContent = wave;
+      botCountSpan.textContent = bots.length;
+      scoreSpan.textContent = score;
+    }
+
+    // --- Input handlers ---
+    canvas.addEventListener('click', e => {
+      if (gameOver || !started || paused) return;
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const tileX = Math.floor(mouseX / TILE_SIZE);
+      const tileY = Math.floor(mouseY / TILE_SIZE);
+      placeTower(tileX, tileY);
+    });
+
+    startBtn.addEventListener('click', () => {
+      resetGameState();
+      pauseBtn.textContent = 'Pause';
+      startWave();
+    });
+
+    pauseBtn.addEventListener('click', () => {
+      if (!started || gameOver) return;
+      paused = !paused;
+      pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    });
+
+    buyBotBtn.addEventListener('click', () => {
+      if (!started || gameOver || paused) return;
+      if (bots.length >= MAX_BOTS) return;
+      if (gold < BOT_COST) return;
+
+      gold -= BOT_COST;
+      bots.push({
+        x: canvas.width / 2 + (Math.random() * 60 - 30),
+        y: canvas.height / 2 + (Math.random() * 60 - 30),
+        speed: 2.1,
+        range: 130,
+        fireRate: 20,
+        fireCooldown: 0,
+        damage: 10,
+        color: '#f1c40f'
+      });
+      updateUI();
+    });
+
+    // --- Init ---
+    resetGameState();
+    loop();
+  </script>
+</body>
+</html>
+
