@@ -150,7 +150,7 @@
 
     const TOWER_TYPES = [
       { name: 'Basic',  cost: 25, range: 110, fireRate: 24, damage: 10, color: '#3498db' },
-      { name: 'Sniper', cost: 40, range: 200, fireRate: 60, damage: 25, color: '#9b59b6' },
+      { name: 'Sniper', cost: 40, range: 200, fireRate: 60, damage: 20, color: '#9b59b6' },
       { name: 'Rapid',  cost: 35, range: 80,  fireRate: 8,  damage: 6,  color: '#e67e22' }
     ];
 
@@ -204,6 +204,7 @@
     const bullets = [];
     const bots = [];
     const perks = [];
+    const explosions = [];
 
     let dangerGrid = createDangerGrid();
     const enemyStats = ENEMY_TYPES.map(() => ({ spawned: 0, survived: 0 }));
@@ -264,7 +265,7 @@
         range: 130,
         fireRate: 20,
         fireCooldown: 0,
-        damage: 10,
+        damage: 8.5,
         color: '#f1c40f'
       });
 
@@ -547,6 +548,17 @@
       });
     }
 
+    function spawnExplosion(x, y) {
+      explosions.push({
+        x,
+        y,
+        radius: 0,
+        maxRadius: 80,
+        alpha: 1
+      });
+    }
+
+
     function spawnTrollEnemy() {
       const row = Math.floor(Math.random() * GRID_ROWS);
       const pos = tileToPixelCenter(0, row);
@@ -573,6 +585,8 @@
     }
 
     function alienExplosion(enemy) {
+      spawnExplosion(enemy.x, enemy.y);
+
       const tile = pixelToTile(enemy.x, enemy.y);
       if (!tile) return;
 
@@ -586,16 +600,23 @@
     }
 
 
+    
+
     function spawnEnemy() {
       const isTrollWave = (wave % 5 === 0);
-
+      let trollProb;
+      if (wave > 19){
+        trollProb = 0.29
+      } else {
+        trollProb = 0.37
+      }
       // Every 5th wave: troll-heavy swarm
       if (isTrollWave) {
         const roll = Math.random();
-        if (roll < 0.5) {
-          // Most spawns are trolls
+        if (roll < trollProb) {
+          // 37% of spawns are trolls
           spawnTrollEnemy();
-        } else if (roll < 0.5 + ALIEN_CHANCE * 2) {
+        } else if (roll < trollProb + ALIEN_CHANCE * 2) {
           // Still allow a few aliens in swarm waves
           spawnAlienEnemy();
         } else {
@@ -656,6 +677,7 @@
                 }
               }
             }
+            spawnExplosion(enemy.bombX, enemy.bombY);
             enemy.bombed = true;
             enemy.hp = 0; // die after bombing
           } else {
@@ -858,7 +880,7 @@
 
     function applyPerk(type) {
       if (type === 'life') {
-        lives = Math.min(lives + 1, 10);
+        lives += 1;
         lastPerkMessage = 'Extra life! (max 10)';
         lastPerkMessageUntil = performance.now() + 3000;
         updateUI();
@@ -909,11 +931,11 @@
 
       // Other perks: very rare, ~9% combined chance
       const roll = Math.random();
-      if (roll < 0.03) {
+      if (roll < 0.02) {
         spawnPerk(x, y, 'life');
-      } else if (roll < 0.06) {
+      } else if (roll < 0.04) {
         spawnPerk(x, y, 'power');
-      } else if (roll < 0.10) {
+      } else if (roll < 0.06) {
         spawnPerk(x, y, 'gold');
       }
     }
@@ -938,7 +960,14 @@
     function update() {
       // danger decays even while paused
       decayDangerGrid();
-
+      for (let i = explosions.length - 1; i >= 0; i--) {
+        const ex = explosions[i];
+        ex.radius += 4;       // how fast the blast expands
+        ex.alpha *= 0.9;      // how fast it fades
+        if (ex.radius > ex.maxRadius || ex.alpha < 0.05) {
+          explosions.splice(i, 1);
+        }
+      }
       // handle perk expiration
       const now = performance.now();
       for (let i = perks.length - 1; i >= 0; i--) {
@@ -1281,6 +1310,25 @@
       ctx.textAlign = 'left';
     }
 
+    function drawExplosions() {
+      for (const ex of explosions) {
+        const gradient = ctx.createRadialGradient(
+          ex.x, ex.y, 0,
+          ex.x, ex.y, ex.radius
+        );
+        gradient.addColorStop(0, `rgba(255, 255, 255, ${ex.alpha})`);
+        gradient.addColorStop(0.3, `rgba(255, 220, 0, ${ex.alpha * 0.9})`);
+        gradient.addColorStop(0.7, `rgba(255, 80, 0, ${ex.alpha * 0.7})`);
+        gradient.addColorStop(1, `rgba(0, 0, 0, 0)`);
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(ex.x, ex.y, ex.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawGrid();
@@ -1290,6 +1338,7 @@
       drawBullets();
       drawPerks();
       drawPerkMessage();
+      drawExplosions();
 
       if (gameOver) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
@@ -1354,7 +1403,7 @@
         range: 130,
         fireRate: 20,
         fireCooldown: 0,
-        damage: 10,
+        damage: 8.5,
         color: '#f1c40f'
       });
       updateUI();
