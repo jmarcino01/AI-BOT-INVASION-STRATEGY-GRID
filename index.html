@@ -85,7 +85,7 @@
   </style>
 </head>
 <body>
-  <h1>AI BOT INVASION STRATEGY DEFENSE</h1>
+  <h1>AI BOT INVASION STRATEGY GRID</h1>
 
   <div id="ui">
     <span>Tokens: <span id="gold">100</span></span>
@@ -150,7 +150,7 @@
 
     const TOWER_TYPES = [
       { name: 'Basic',  cost: 25, range: 110, fireRate: 24, damage: 10, color: '#3498db' },
-      { name: 'Sniper', cost: 40, range: 200, fireRate: 60, damage: 25, color: '#9b59b6' },
+      { name: 'Sniper', cost: 40, range: 200, fireRate: 60, damage: 18, color: '#9b59b6' },
       { name: 'Rapid',  cost: 35, range: 80,  fireRate: 8,  damage: 6,  color: '#e67e22' }
     ];
 
@@ -183,8 +183,8 @@
     const PERK_LIFETIME_MS = 8000;
 
     // New special enemy chances
-    const ALIEN_CHANCE = 1 / 200;  // ~0.5%
-    const TROLL_CHANCE = 0.03;     // ~3%
+    const ALIEN_CHANCE = 1 / 67;  // ~1.5%
+    const TROLL_CHANCE = 0.082;     // ~8.2%
 
     let gold;
     let lives;
@@ -572,7 +572,40 @@
       });
     }
 
+    function alienExplosion(enemy) {
+      const tile = pixelToTile(enemy.x, enemy.y);
+      if (!tile) return;
+
+      // Destroy towers in a 3x3 area around the impact tile
+      for (let i = towers.length - 1; i >= 0; i--) {
+        const t = towers[i];
+        if (Math.abs(t.tx - tile.tx) <= 1 && Math.abs(t.ty - tile.ty) <= 1) {
+          towers.splice(i, 1);
+        }
+      }
+    }
+
+
     function spawnEnemy() {
+      const isTrollWave = (wave % 5 === 0);
+
+      // Every 5th wave: troll-heavy swarm
+      if (isTrollWave) {
+        const roll = Math.random();
+        if (roll < 0.5) {
+          // Most spawns are trolls
+          spawnTrollEnemy();
+        } else if (roll < 0.5 + ALIEN_CHANCE * 2) {
+          // Still allow a few aliens in swarm waves
+          spawnAlienEnemy();
+        } else {
+          // Occasional normal enemies
+          spawnNormalEnemy();
+        }
+        return;
+      }
+
+      // Normal waves:
       const r = Math.random();
       if (r < ALIEN_CHANCE) {
         spawnAlienEnemy();
@@ -582,6 +615,7 @@
         spawnNormalEnemy();
       }
     }
+
 
     function updateEnemy(enemy) {
       if (enemy.kind === 'troll') {
@@ -955,12 +989,17 @@
             gameOverDiv.textContent = 'Game Over! Press Start to restart.';
           }
         } else if (e.hp <= 0) {
-          gold += e.reward;
-          score += e.reward * 10;
-          maybeDropPerk(e.x, e.y);
-          enemies.splice(i, 1);
-          updateUI();
-          addDangerAtPixel(e.x, e.y, DANGER_FROM_DEATH);
+            // Aliens explode on death (impact), wiping nearby towers once
+            if (e.kind === 'alien' && !e.bombed) {
+              alienExplosion(e);
+              e.bombed = true;  // reuse flag to avoid double explosions
+            }
+            gold += e.reward;
+            score += e.reward * 10;
+            maybeDropPerk(e.x, e.y);
+            enemies.splice(i, 1);
+            updateUI();
+            addDangerAtPixel(e.x, e.y, DANGER_FROM_DEATH);
         }
       }
 
@@ -1291,8 +1330,10 @@
     startBtn.addEventListener('click', () => {
       resetGameState();
       pauseBtn.textContent = 'Pause';
+      startBtn.textContent = 'Restart';
       startWave();
     });
+
 
     pauseBtn.addEventListener('click', () => {
       if (!started || gameOver) return;
