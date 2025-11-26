@@ -149,9 +149,9 @@
     const GRID_ROWS = 12;
 
     const TOWER_TYPES = [
-      { name: 'Basic',  cost: 25, range: 110, fireRate: 24, damage: 10, color: '#3498db' },
+      { name: 'Basic',  cost: 25, range: 150, fireRate: 24, damage: 12, color: '#3498db' },
       { name: 'Sniper', cost: 40, range: 200, fireRate: 60, damage: 20, color: '#9b59b6' },
-      { name: 'Rapid',  cost: 35, range: 80,  fireRate: 8,  damage: 6,  color: '#e67e22' }
+      { name: 'Rapid',  cost: 35, range: 125,  fireRate: 8,  damage: 10,  color: '#e67e22' }
     ];
 
     // kind: "normal", "alien", "troll"
@@ -410,7 +410,15 @@
           const nk = key(n.tx, n.ty);
           const danger = dangerGrid[n.ty][n.tx];
           const towerPenalty = tileInTowerRange(n.tx, n.ty);
-          const stepCost = 1 + danger * 1.2 + towerPenalty;
+          // it was found that the original A* heuristic naturally favored the edges of
+          // the graph --- updates made to heuristic and cost function to balance
+          let edgePenalty = 0;
+            if (n.ty === 0 || n.ty === GRID_ROWS - 1) {
+              edgePenalty = 0.6;               // heaviest penalty at extreme edges
+            } else if (n.ty === 1 || n.ty === GRID_ROWS - 2) {
+              edgePenalty = 0.3;               // slight penalty one in from the edge
+            }
+          const stepCost = 1 + danger * 0.6 + towerPenalty * 0.5 + edgePenalty;
           const tentativeG = gScore.get(currentKey) + stepCost;
 
           if (tentativeG < gScore.get(nk)) {
@@ -598,7 +606,6 @@
         }
       }
     }
-
 
     
 
