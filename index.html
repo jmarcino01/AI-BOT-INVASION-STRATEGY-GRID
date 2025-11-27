@@ -97,6 +97,7 @@
     <button id="startBtn">Start</button>
     <button id="pauseBtn">Pause</button>
     <button id="buyBotBtn">Buy Bot (75)</button>
+    <button id="barrierBtn">Barrier<br>20</button>
 
     <div id="towerSelector">
       <span>Towers:</span>
@@ -143,6 +144,7 @@
     const startBtn = document.getElementById('startBtn');
     const pauseBtn = document.getElementById('pauseBtn');
     const buyBotBtn = document.getElementById('buyBotBtn');
+    const barrierBtn = document.getElementById('barrierBtn');
 
     const TILE_SIZE = 40;
     const GRID_COLS = 20;
@@ -176,6 +178,11 @@
     const BOT_COST = 75;
     const MAX_BOTS = 4;
 
+    const BARRIER_COST = 20;
+    const BARRIER_MAX_HP = 300;
+    const TROLL_BARRIER_DAMAGE_PER_FRAME = BARRIER_MAX_HP / 300; // ~5s at ~60fps
+    
+
     // Perks
     const PERK_COLLECT_RADIUS = 24;
     const POWER_MULTIPLIER = 1.5;
@@ -198,6 +205,7 @@
     let waveInProgress;
     let enemiesPerWaveForCurrent;
     let selectedTowerTypeIndex;
+    let placingBarrier = false; 
 
     const towers = [];
     const enemies = [];
@@ -205,6 +213,7 @@
     const bots = [];
     const perks = [];
     const explosions = [];
+    const barriers = [];
 
     let dangerGrid = createDangerGrid();
     const enemyStats = ENEMY_TYPES.map(() => ({ spawned: 0, survived: 0 }));
@@ -236,6 +245,7 @@
       enemySpawnCounter = 0;
       enemiesSpawnedThisWave = 0;
       waveInProgress = false;
+      placingBarrier = false;
       enemiesPerWaveForCurrent = ENEMIES_PER_WAVE_BASE;
       selectedTowerTypeIndex = 0;
 
@@ -244,6 +254,7 @@
       bullets.length = 0;
       bots.length = 0;
       perks.length = 0;
+      barriers.length = 0;
 
       dangerGrid = createDangerGrid();
       for (const stat of enemyStats) {
@@ -277,6 +288,8 @@
     towerButtons.forEach(btn => {
       btn.addEventListener('click', () => {
         selectedTowerTypeIndex = parseInt(btn.dataset.tower, 10);
+        placingBarrier = false;
+        if (barrierBtn) barrierBtn.classList.remove('selected');
         towerButtons.forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
       });
@@ -418,7 +431,12 @@
             } else if (n.ty === 1 || n.ty === GRID_ROWS - 2) {
               edgePenalty = 0.3;               // slight penalty one in from the edge
             }
-          const stepCost = 1 + danger * 0.6 + towerPenalty * 0.5 + edgePenalty;
+
+          // Strong penalty for barrier tiles so enemies try to go around
+          const hasBarrier = barriers.some(b => b.tx === n.tx && b.ty === n.ty);
+          const barrierCost = hasBarrier ? 5000 : 0;
+
+          const stepCost = 1 + danger * 0.6 + towerPenalty * 0.5 + edgePenalty + barrierCost;
           const tentativeG = gScore.get(currentKey) + stepCost;
 
           if (tentativeG < gScore.get(nk)) {
@@ -647,7 +665,42 @@
 
     function updateEnemy(enemy) {
       if (enemy.kind === 'troll') {
-        // Move straight to the right, smashing towers handled elsewhere
+        // Trolls move straight to the right but are blocked by barriers.
+        const currentTile = pixelToTile(enemy.x, enemy.y);
+        if (currentTile) {
+          const aheadTx = currentTile.tx + 1;
+          const aheadTy = enemy.rowTy;  // row trolls are committed to
+
+          // Check for barriers directly ahead in this lane
+          const hitBarriers = [];
+          for (const b of barriers) {
+            if (b.tx === aheadTx && b.ty === aheadTy) {
+              hitBarriers.push(b);
+            }
+          }
+
+          if (hitBarriers.length > 0) {
+            // Troll is chewing on barriers: deal damage, but don't advance
+            const damage = TROLL_BARRIER_DAMAGE_PER_FRAME;
+            const damageEach = damage / hitBarriers.length;
+
+            for (const b of hitBarriers) {
+              b.hp -= damageEach;
+            }
+
+            // Remove destroyed barriers
+            for (let i = barriers.length - 1; i >= 0; i--) {
+              if (barriers[i].hp <= 0) {
+                barriers.splice(i, 1);
+              }
+            }
+
+            // Troll stays in place this frame while chewing through barriers
+            return;
+          }
+        }
+
+        // No barrier blocking: move straight, smashing towers handled elsewhere
         enemy.vx = enemy.speed;
         enemy.vy = 0;
         enemy.x += enemy.vx;
@@ -656,6 +709,8 @@
         }
         return;
       }
+
+      // ----------- normal / alien enemies below -----------
 
       if (!enemy.path || enemy.path.length === 0) return;
       const target = enemy.path[enemy.pathIndex];
@@ -699,10 +754,36 @@
       }
     }
 
+    // --- Barriers ---
+    function placeBarrier(tileX, tileY) {
+      if (!started || gameOver || paused) return;
+
+      // Don't stack with towers or other barriers
+      if (towers.some(t => t.tx === tileX && t.ty === tileY)) return;
+      if (barriers.some(b => b.tx === tileX && b.ty === tileY)) return;
+
+      if (gold < BARRIER_COST) return;
+
+      gold -= BARRIER_COST;
+      updateUI();
+
+      const pos = tileToPixelCenter(tileX, tileY);
+      barriers.push({
+        tx: tileX,
+        ty: tileY,
+        x: pos.x,
+        y: pos.y,
+        hp: BARRIER_MAX_HP,
+        maxHp: BARRIER_MAX_HP
+      });
+    }
+
+
     // --- Towers ---
     function placeTower(tileX, tileY) {
       if (!started || gameOver || paused) return;
       if (towers.some(t => t.tx === tileX && t.ty === tileY)) return;
+      if (barriers.some(b => b.tx === tileX && b.ty === tileY)) return;
 
       const type = TOWER_TYPES[selectedTowerTypeIndex];
       if (gold < type.cost) return;
@@ -1335,6 +1416,34 @@
       }
     }
 
+    function drawBarriers() {
+      for (const b of barriers) {
+        // Body
+        const size = TILE_SIZE - 8;
+        ctx.fillStyle = '#7f8c8d';
+        ctx.fillRect(b.x - size / 2, b.y - size / 2, size, size);
+
+        // HP bar
+        const hpRatio = b.hp / b.maxHp;
+        const barWidth = size;
+        const barHeight = 4;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(
+          b.x - barWidth / 2,
+          b.y - size / 2 - 6,
+          barWidth,
+          barHeight
+        );
+        ctx.fillStyle = '#2ecc71';
+        ctx.fillRect(
+          b.x - barWidth / 2,
+          b.y - size / 2 - 6,
+          barWidth * hpRatio,
+          barHeight
+        );
+      }
+    }
+
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1345,6 +1454,7 @@
       drawBullets();
       drawPerks();
       drawPerkMessage();
+      drawBarriers();
       drawExplosions();
 
       if (gameOver) {
@@ -1380,15 +1490,28 @@
       const mouseY = e.clientY - rect.top;
       const tileX = Math.floor(mouseX / TILE_SIZE);
       const tileY = Math.floor(mouseY / TILE_SIZE);
-      placeTower(tileX, tileY);
+
+      if (placingBarrier) {
+        placeBarrier(tileX, tileY);
+      } else {
+        placeTower(tileX, tileY);
+      }
     });
+
 
     startBtn.addEventListener('click', () => {
       resetGameState();
       pauseBtn.textContent = 'Pause';
-      startBtn.textContent = 'Restart';
+      startBtn.textContent = 'Restart'; 
+      placingBarrier = false;
+      if (barrierBtn) barrierBtn.classList.remove('selected');
+      // re-select basic tower button as default
+      towerButtons.forEach(b => b.classList.remove('selected'));
+      const firstTowerBtn = document.querySelector('[data-tower="0"]');
+      if (firstTowerBtn) firstTowerBtn.classList.add('selected');
       startWave();
     });
+
 
 
     pauseBtn.addEventListener('click', () => {
@@ -1414,6 +1537,14 @@
         color: '#f1c40f'
       });
       updateUI();
+    });
+
+    barrierBtn.addEventListener('click', () => {
+      if (!started || gameOver) return;
+      placingBarrier = true;
+      // Deselect tower buttons
+      towerButtons.forEach(b => b.classList.remove('selected'));
+      barrierBtn.classList.add('selected');
     });
 
     // --- Init ---
