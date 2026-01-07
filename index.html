@@ -970,7 +970,7 @@
     function applyPerk(type) {
       if (type === 'life') {
         lives += 1;
-        lastPerkMessage = 'Extra life! (max 10)';
+        lastPerkMessage = 'Extra life!';
         lastPerkMessageUntil = performance.now() + 3000;
         updateUI();
       } else if (type === 'power') {
@@ -992,6 +992,7 @@
     function triggerBomb() {
       for (let i = enemies.length - 1; i >= 0; i--) {
         const e = enemies[i];
+        spawnExplosion(e.x, e.y);
         gold += e.reward;
         score += e.reward * 10;
         addDangerAtPixel(e.x, e.y, DANGER_FROM_DEATH);
@@ -1012,8 +1013,8 @@
     function maybeDropPerk(x, y) {
       totalKills++;
 
-      // Bomb: very rare, ~1/500 kills
-      if (Math.random() < 1 / 500) {
+      // Bomb: very rare, ~1/400 kills
+      if (Math.random() < 1 / 400) {
         spawnPerk(x, y, 'bomb');
         return;
       }
