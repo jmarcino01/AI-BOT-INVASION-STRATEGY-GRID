@@ -116,12 +116,13 @@
     • Click <b>Buy Bot (75)</b> to deploy up to 3 extra roaming AI bots (max 4 total).<br>
     • Bots and tanks are friendly mechs; enemies are hostile robots, trolls, and aliens.<br>
     • Bots chase enemies and auto-collect perks that drop from destroyed enemies:<br>
-    &nbsp;&nbsp;– <b>Green cross</b>: +1 life (up to 10 max)<br>
+    &nbsp;&nbsp;– <b>Green cross</b>: +1 life <br>
     &nbsp;&nbsp;– <b>Yellow lightning</b>: 30s 1.5× attack power for all shots fired during buff<br>
     &nbsp;&nbsp;– <b>Gold coin</b>: +50 tokens<br>
     &nbsp;&nbsp;– <b>Red bomb</b>: rare, wipes all enemies on the board when collected<br>
-    • Aliens appear rarely and bomb the weakest 3×3 defense if not destroyed in time.<br>
-    • Trolls march straight and smash towers one by one along their lane.<br>
+    • Aliens appear rarely and explode on destruction taking out a 3x3 section of the grid.<br>
+    • Trolls are three squares wide and march straight, smashing towers one by one along their lane.<br>
+    • Barriers stop trolls in place and withstand damage for 5 seconds. Barriers do not stop bots or aliens<br>
     • Perks are rare and disappear after a short time if not collected.<br>
     • Click <b>Start</b> to begin or restart. Click <b>Pause</b> to pause/resume.<br>
     • When paused, you cannot place towers or buy new bots.
@@ -191,7 +192,7 @@
 
     // New special enemy chances
     const ALIEN_CHANCE = 1 / 67;  // ~1.5%
-    const TROLL_CHANCE = 0.082;     // ~8.2%
+    const TROLL_CHANCE = 0.075;     // ~7.5%
 
     let gold;
     let lives;
