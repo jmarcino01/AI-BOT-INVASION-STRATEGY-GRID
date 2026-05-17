@@ -96,7 +96,7 @@
 
     <button id="startBtn">Start</button>
     <button id="pauseBtn">Pause</button>
-    <button id="buyBotBtn">Buy Bot (75)</button>
+    <button id="buyBotBtn">Buy Bot<br>75<br>(Max 4)</button>
     <button id="barrierBtn">Barrier<br>20</button>
 
     <div id="towerSelector">
@@ -104,6 +104,7 @@
       <button data-tower="0" class="selected">Basic<br>25</button>
       <button data-tower="1">Sniper<br>40</button>
       <button data-tower="2">Rapid<br>35</button>
+      <button data-tower="3">Smart Cannon<br>250<br>(Max 2)</button>
     </div>
   </div>
 
@@ -154,7 +155,8 @@
     const TOWER_TYPES = [
       { name: 'Basic',  cost: 25, range: 150, fireRate: 24, damage: 12, color: '#3498db' },
       { name: 'Sniper', cost: 40, range: 200, fireRate: 60, damage: 20, color: '#9b59b6' },
-      { name: 'Rapid',  cost: 35, range: 125,  fireRate: 8,  damage: 10,  color: '#e67e22' }
+      { name: 'Rapid',  cost: 35, range: 125,  fireRate: 8,  damage: 10,  color: '#e67e22' },
+      { name: ' Smart Cannon', cost: 250, range: canvas.width * (2 / 3), fireRate: 300, damage: 999999, color: '#ecf0f1' }
     ];
 
     // kind: "normal", "alien", "troll"
@@ -178,6 +180,7 @@
 
     const BOT_COST = 75;
     const MAX_BOTS = 4;
+    const MAX_CANNONS = 2;
 
     const BARRIER_COST = 20;
     const BARRIER_MAX_HP = 300;
@@ -215,6 +218,7 @@
     const perks = [];
     const explosions = [];
     const barriers = [];
+    const cannonBlasts = [];
 
     let dangerGrid = createDangerGrid();
     const enemyStats = ENEMY_TYPES.map(() => ({ spawned: 0, survived: 0 }));
@@ -256,6 +260,7 @@
       bots.length = 0;
       perks.length = 0;
       barriers.length = 0;
+      cannonBlasts.length = 0;
 
       dangerGrid = createDangerGrid();
       for (const stat of enemyStats) {
@@ -451,6 +456,45 @@
       }
 
       return [tileToPixelCenter(startTile.tx, startTile.ty)];
+    }
+
+    function isEnemyInRange(tower, enemy) {
+      const dx = enemy.x - tower.x;
+      const dy = enemy.y - tower.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      return dist <= tower.range;
+    }
+
+    function selectSmartCannonTarget(tower) {
+      const enemiesInRange = enemies.filter(enemy => isEnemyInRange(tower, enemy));
+
+      if (enemiesInRange.length === 0) {
+        return null;
+      }
+
+      // 1. Highest priority: alien anywhere in cannon range
+      // If multiple aliens are in range, target the alien closest to the endzone.
+      const aliens = enemiesInRange.filter(enemy => enemy.kind === 'alien');
+      if (aliens.length > 0) {
+        return aliens.reduce((best, enemy) => {
+          return enemy.x > best.x ? enemy : best;
+        });
+      }
+
+      // 2. Next priority: closest troll to the cannon
+      const trolls = enemiesInRange.filter(enemy => enemy.kind === 'troll');
+      if (trolls.length > 0) {
+        return trolls.reduce((best, enemy) => {
+          const enemyDist = Math.hypot(enemy.x - tower.x, enemy.y - tower.y);
+          const bestDist = Math.hypot(best.x - tower.x, best.y - tower.y);
+          return enemyDist < bestDist ? enemy : best;
+        });
+      }
+
+      // 3. Final priority: regular enemy closest to the endzone
+      return enemiesInRange.reduce((best, enemy) => {
+        return enemy.x > best.x ? enemy : best;
+      });
     }
 
     // --- Special target for Aliens: weakest 3x3 defense near front ---
@@ -787,6 +831,17 @@
       if (barriers.some(b => b.tx === tileX && b.ty === tileY)) return;
 
       const type = TOWER_TYPES[selectedTowerTypeIndex];
+
+      // Limit cannons to 2 total
+      if (selectedTowerTypeIndex === 3) {
+        const cannonCount = towers.filter(t => t.typeIndex === 3).length;
+        if (cannonCount >= MAX_CANNONS) {
+          lastPerkMessage = 'Cannon limit reached! Max 2 cannons.';
+          lastPerkMessageUntil = performance.now() + 2500;
+          return;
+        }
+      }
+
       if (gold < type.cost) return;
 
       gold -= type.cost;
@@ -806,6 +861,29 @@
         angle: 0,
         typeIndex: selectedTowerTypeIndex
       });
+    }
+
+    function fireCannon(tower, target) {
+      // Instantly destroy the target
+      target.hp = 0;
+
+      // Point cannon toward target
+      const dx = target.x - tower.x;
+      const dy = target.y - tower.y;
+      tower.angle = Math.atan2(dy, dx);
+
+      // Visual blast line
+      cannonBlasts.push({
+        x1: tower.x,
+        y1: tower.y,
+        x2: target.x,
+        y2: target.y,
+        alpha: 1,
+        width: 8
+      });
+
+      // Small explosion at impact point
+      spawnExplosion(target.x, target.y);
     }
 
     function spawnBullet(shooter, target) {
@@ -1058,6 +1136,15 @@
           explosions.splice(i, 1);
         }
       }
+      for (let i = cannonBlasts.length - 1; i >= 0; i--) {
+        const blast = cannonBlasts[i];
+        blast.alpha *= 0.82;
+        blast.width *= 0.88;
+
+        if (blast.alpha < 0.05 || blast.width < 1) {
+          cannonBlasts.splice(i, 1);
+        }
+      }
       // handle perk expiration
       const now = performance.now();
       for (let i = perks.length - 1; i >= 0; i--) {
@@ -1129,18 +1216,27 @@
         }
 
         let bestEnemy = null;
-        let bestScore = -Infinity;
 
-        for (const enemy of enemies) {
-          const dx = enemy.x - tower.x;
-          const dy = enemy.y - tower.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist <= tower.range) {
-            const progress = enemy.x / canvas.width;
-            const scoreVal = progress - dist / (tower.range * 4);
-            if (scoreVal > bestScore) {
-              bestScore = scoreVal;
-              bestEnemy = enemy;
+        if (tower.typeIndex === 3) {
+          // Smart cannon targeting
+          bestEnemy = selectSmartCannonTarget(tower);
+        } else {
+          // Normal tower targeting
+          let bestScore = -Infinity;
+
+          for (const enemy of enemies) {
+            const dx = enemy.x - tower.x;
+            const dy = enemy.y - tower.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist <= tower.range) {
+              const progress = enemy.x / canvas.width;
+              const scoreVal = progress - dist / (tower.range * 4);
+
+              if (scoreVal > bestScore) {
+                bestScore = scoreVal;
+                bestEnemy = enemy;
+              }
             }
           }
         }
@@ -1151,13 +1247,15 @@
           tower.angle = Math.atan2(dy, dx);
 
           if (tower.fireCooldown <= 0) {
-            if (tower.typeIndex === 1) {
-              // Sniper with leading
+            if (tower.typeIndex === 3) {
+              fireCannon(tower, bestEnemy);
+            } else if (tower.typeIndex === 1) {
               spawnLeadingBullet(tower, bestEnemy);
             } else {
               spawnBullet(tower, bestEnemy);
             }
-              tower.fireCooldown = tower.fireRate;
+
+            tower.fireCooldown = tower.fireRate;
           }
         }
       }
@@ -1248,6 +1346,24 @@
         ctx.beginPath();
         ctx.arc(tower.x, tower.y, tower.range, 0, Math.PI * 2);
         ctx.stroke();
+
+        // Cannon cooldown bar
+        if (tower.typeIndex === 3) {
+          const cooldownRatio = Math.max(0, tower.fireCooldown) / tower.fireRate;
+          const barWidth = 28;
+          const barHeight = 4;
+
+          ctx.fillStyle = '#000';
+          ctx.fillRect(tower.x - barWidth / 2, tower.y + 20, barWidth, barHeight);
+
+          ctx.fillStyle = cooldownRatio > 0 ? '#e74c3c' : '#2ecc71';
+          ctx.fillRect(
+            tower.x - barWidth / 2,
+            tower.y + 20,
+            barWidth * (1 - cooldownRatio),
+            barHeight
+          );
+        }
       }
     }
 
@@ -1337,6 +1453,26 @@
         ctx.beginPath();
         ctx.arc(bot.x, bot.y, bot.range, 0, Math.PI * 2);
         ctx.stroke();
+      }
+    }
+
+    function drawCannonBlasts() {
+      for (const blast of cannonBlasts) {
+        ctx.save();
+        ctx.strokeStyle = `rgba(255, 255, 255, ${blast.alpha})`;
+        ctx.lineWidth = blast.width;
+        ctx.beginPath();
+        ctx.moveTo(blast.x1, blast.y1);
+        ctx.lineTo(blast.x2, blast.y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = `rgba(241, 196, 15, ${blast.alpha * 0.8})`;
+        ctx.lineWidth = Math.max(1, blast.width / 2);
+        ctx.beginPath();
+        ctx.moveTo(blast.x1, blast.y1);
+        ctx.lineTo(blast.x2, blast.y2);
+        ctx.stroke();
+        ctx.restore();
       }
     }
 
@@ -1454,6 +1590,7 @@
       drawBots();
       drawEnemies();
       drawBullets();
+      drawCannonBlasts();
       drawPerks();
       drawPerkMessage();
       drawBarriers();
